@@ -199,20 +199,23 @@ void begin(void)
   asic_tetra_t a;
   int8_t e;
   initial_program(&a);
+  xtimer_usleep(100000);
+  e = asic_calibrate(&a);
+  if (e) {
+    printf("calibrate failed\n");
+    goto failure;
+  }
   while (1)
   {
-    e = asic_calibrate(&a);
-    if (e) {
-      printf("calibrate failed\n");
-      goto failure;
-    }
-    for (int8_t i = 0; i < 4; i++)
-    {
-      printf("[cal] ASIC %d measured %d\n", i, a.calres[i]);
-    }
+    //for (int8_t i = 0; i < 4; i++)
+    //{
+    //  printf("[cal] ASIC %d measured %d\n", i, a.calres[i]);
+    //}
 
     for (int i = 0; i < 128; i++)
     {
+      e = asic_fake_measure(&a);
+      if (e) goto failure;
       for (int p = 0; p < 4; p ++)
       {
         sampm[p].uptime = xtimer_usec_from_ticks64(xtimer_now64());

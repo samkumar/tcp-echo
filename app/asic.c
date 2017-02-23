@@ -68,7 +68,11 @@
 
 #define GINT (GPIO_PIN(0,18))
 
+#ifdef ROOM_TYPE
 #define DEF_MAXRANGE 0x10
+#elif defined(DUCT_TYPE)
+#define DEF_MAXRANGE 32
+#endif
 
 #define SAMPLE_SIZE 70
 #define CAL_US 160000
@@ -281,7 +285,18 @@ int8_t set_max_range(asic_tetra_t *a, uint8_t num, uint8_t val)
 }
 int8_t read_sample_data(asic_tetra_t *a, uint8_t num, uint8_t *dst)
 {
+  #ifdef ROOM_TYPE
   return _read_reg(a, num, TOF_SF, SAMPLE_SIZE, dst);
+  #elif defined(DUCT_TYPE)
+  int rv1 = _read_reg(a, num, TOF_SF, 6, &dst[0]);
+  if (rv1) {
+    return rv1;
+  }
+  int rv2 = _read_reg(a, num, 0x4E, 64, &dst[6]);
+  return rv2;
+  #else
+  #error define type yo, what do you think this is?
+  #endif
 }
 int8_t asic_program(asic_tetra_t *a, uint8_t num)
 {
@@ -360,6 +375,25 @@ int8_t asic_configure(asic_tetra_t *a, uint8_t num)
   //moar?
   if (i2c_release(a->i2c)) return -5;
   return E_OK;
+}
+
+int8_t asic_fake_measure(asic_tetra_t *a)
+{
+  int8_t e;
+  if (i2c_acquire(a->i2c)) return E_FAIL;
+  for (int i = 0; i < 4; i++)
+  {
+    e = set_opmode(a, i, MODE_RX);
+    if (e) goto fail;
+  }
+  set_gint(a, 1);
+  xtimer_usleep(20);
+  set_gint(a, 0);
+  xtimer_usleep(SAMPLE_US);
+  e = E_OK;
+  fail:
+  i2c_release(a->i2c);
+  return e;
 }
 int8_t asic_measure(asic_tetra_t *a, uint8_t primary, measurement_t *m)
 {

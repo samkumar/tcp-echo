@@ -26,6 +26,7 @@ int8_t asic_init(asic_tetra_t *a, i2c_t i2c);
 int8_t asic_program(asic_tetra_t *a, uint8_t num);
 int8_t asic_led(asic_tetra_t *a, uint8_t red, uint8_t green, uint8_t blue);
 int8_t asic_measure(asic_tetra_t *a, uint8_t primary, measurement_t *m);
+int8_t asic_fake_measure(asic_tetra_t *a);
 int8_t asic_calibrate(asic_tetra_t *a);
 int8_t asic_check_ready(asic_tetra_t *a, uint8_t num);
 int8_t asic_all_out_of_reset(asic_tetra_t *a);
