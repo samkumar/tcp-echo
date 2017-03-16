@@ -3,6 +3,7 @@
 #include <periph/gpio.h>
 #include "gpb_v1.0_wind.rawbin.h"
 #include "wind_v8.rawbin.h"
+#include "wind_v10.rawbin.h"
 #define PROG_ADDR 0x85
 #define PROG_CNT  0x87
 #define PROG_CTL  0xC4
@@ -11,7 +12,7 @@
 #define DEF_ADDR  0x45
 //#define DEF_ADDR  0x8a
 
-#define ASIC_FIRMWARE_ARRAY wind_v8_rawbin
+#define ASIC_FIRMWARE_ARRAY wind_v10_rawbin
 #define OPMODE 0x01
 #define OPMODE_SZ 01
 #define TICK_INTERVAL 0x02
