@@ -1,5 +1,4 @@
 
-//Chirp Microsystems Firmware Header Generator
 //File generated from wind_v10.hex at 2017-02-23 11:54:46.698000 by Richie
 #ifndef WIND_V10_RAWBIN_H
 #define WIND_V10_RAWBIN_H
