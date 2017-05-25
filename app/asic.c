@@ -293,7 +293,7 @@ int8_t read_sample_data(asic_tetra_t *a, uint8_t num, uint8_t *dst)
   if (rv1) {
     return rv1;
   }
-  int rv2 = _read_reg(a, num, 0x4E, 64, &dst[6]);
+  int rv2 = _read_reg(a, num, 0x4C, 64, &dst[6]);
   return rv2;
   #else
   #error define type yo, what do you think this is?
