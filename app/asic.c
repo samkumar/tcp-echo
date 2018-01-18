@@ -299,6 +299,18 @@ int8_t read_sample_data(asic_tetra_t *a, uint8_t num, uint8_t *dst)
   #error define type yo, what do you think this is?
   #endif
 }
+//For a room anemometer, read from 0..16
+//For a duct anemometer, read from 12..28
+int8_t read_16_iq_points(asic_tetra_t *a, uint8_t num, uint8_t *dst)
+{
+  #ifdef ROOM_TYPE
+  return _read_reg(a, num, 0x1c, 64, dst);
+  #elif defined(DUCT_TYPE)
+  return _read_reg(a, num, 0x4c, 64, dst);
+  #else
+  #error define type yo, what do you think this is?
+  #endif
+}
 int8_t asic_program(asic_tetra_t *a, uint8_t num)
 {
   if (i2c_acquire(a->i2c)) return -10;
@@ -419,6 +431,46 @@ int8_t asic_measure(asic_tetra_t *a, uint8_t primary, measurement_t *m)
   for (int i = 0; i < 4; i++)
   {
     e = read_sample_data(a, i, &(m->sampledata[i][0]));
+    if (e) {
+      e = - (40+i);
+      goto fail;
+    }
+  }
+  m->primary = primary;
+  e = E_OK;
+  fail:
+  i2c_release(a->i2c);
+  return e;
+}
+int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
+{
+  int8_t e;
+  int slotindex = 0;
+  if (i2c_acquire(a->i2c)) return E_FAIL;
+  for (int i = 0; i < 4; i++)
+  {
+    if (i == primary)
+    {
+      e = set_opmode(a, i, MODE_TXRX);
+    }
+    else
+    {
+      e = set_opmode(a, i, MODE_RX);
+    }
+    if (e) goto fail;
+  }
+  set_gint(a, 1);
+  xtimer_usleep(20);
+  set_gint(a, 0);
+  xtimer_usleep(SAMPLE_US);
+
+  for (int i = 0; i < 4; i++)
+  {
+    if (i == primary) {
+      continue;
+    }
+    e = read_16_iq_points(a, i, &(m->sampledata[slotindex][0]));
+    slotindex++;
     if (e) {
       e = - (40+i);
       goto fail;

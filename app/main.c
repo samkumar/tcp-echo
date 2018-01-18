@@ -10,38 +10,69 @@
 #include "net/gnrc/udp.h"
 #include "net/gnrc/netapi.h"
 #include "net/gnrc/netreg.h"
-
-#include <at30ts74.h>
-#include <mma7660.h>
+#include "phydat.h"
+#include "saul_reg.h"
 #include <periph/gpio.h>
 #include "asic.h"
 #include "version.h"
-#include <reboot.h>
+
 // 1 second, defined in us
 #define INTERVAL (1000000U)
 #define NETWORK_RTT_US 1000000
 #define COUNT_TX (-4)
 #define A_LONG_TIME 5000000U
 #define MAIN_QUEUE_SIZE     (8)
-#define L7_TYPE 7
+
+#ifdef ROOM_TYPE
+#define BUILD 190
+#elif defined(DUCT_TYPE)
+#define BUILD 195
+#endif
+
+//Anemometer v2
+#define L7_TYPE 9
+
 static msg_t _main_msg_queue[MAIN_QUEUE_SIZE];
 
 uint16_t ms_seqno = 0;
 
-#define XOR_OFFSET 5
+#define XOR_OFFSET 4
 
 typedef struct __attribute__((packed))
 {
-  uint16_t l7type;
-  uint8_t type;
-  uint16_t seqno;
-  uint16_t build;
-  uint16_t cal_pulse;
-  uint16_t calres[4];
-  uint64_t uptime;
-  uint8_t primary;
-  uint8_t data[4][70];
-} measure_set_t;
+  uint8_t   l7type;     // 0
+  uint8_t   type;       // 1
+  uint16_t  seqno;      // 2:3
+  uint8_t   primary;    // 4
+  uint8_t   buildnum;   // 5
+  int16_t   acc_x;      // 6:7
+  int16_t   acc_y;      // 8:9
+  int16_t   acc_z;      // 10:11
+  int16_t   mag_x;      // 12:13
+  int16_t   mag_y;      // 14:15
+  int16_t   mag_z;      // 16:17
+  int16_t   hdc_temp;   // 18:19
+  int16_t   hdc_hum;    // 20:21
+  uint8_t   max_index[3]; // 22:24
+  uint8_t   parity;    // 25
+  uint16_t  cal_res;   // 26:27
+  //Packed IQ data for 4 pairs
+  //M-3, M-2, M-1, M
+  uint8_t data[3][16];  //28:75
+} measure_set_t; //76 bytes
+
+// typedef struct __attribute__((packed))
+// {
+//   uint16_t l7type;
+//   uint8_t type;
+//   uint16_t seqno;
+//   uint16_t build;
+//   uint16_t cal_pulse;
+//   uint16_t calres[4];
+//   uint64_t uptime;
+//   uint8_t primary;
+//   uint8_t data[4][70];
+// } measure_set_t;
 
 #define MSI_MAX 4
 uint8_t msi;
@@ -49,22 +80,145 @@ measure_set_t msz[MSI_MAX];
 uint8_t xorbuf [sizeof(measure_set_t)];
 extern void send_udp(char *addr_str, uint16_t port, uint8_t *data, uint16_t datalen);
 
+void reboot(void){
+  NVIC_SystemReset();
+}
+//In a 64 byte array of 16 big endian int16_t pairs of I and Q, what
+//is the index where the complex magnitude is greatest [0,15]?
+uint8_t calculate_max_index(uint8_t *data) {
+  int64_t ix;
+  int64_t qx;
+  uint64_t magsqr;
+  uint64_t magsqrmax;
+  uint8_t indexmax;
+
+  magsqrmax = 0;
+  indexmax = 0;
+
+  for (int i = 0; i < 16; i++) {
+    qx = (int16_t) ((uint16_t)data[i<<2] + (((uint16_t)data[(i<<2) + 1]) << 8));
+    ix = (int16_t) ((uint16_t)data[(i<<2) + 2] + (((uint16_t)data[(i<<2) + 3]) << 8));
+    magsqr = (qx * qx) + (ix * ix);
+    if (magsqr > magsqrmax) {
+      indexmax = i;
+      magsqrmax = magsqr;
+    }
+  }
+  return indexmax;
+}
+
+
+saul_reg_t *sensor_temp_t    = NULL;
+saul_reg_t *sensor_hum_t     = NULL;
+saul_reg_t *sensor_mag_t     = NULL;
+saul_reg_t *sensor_accel_t   = NULL;
+
+
+void sensor_config(void) {
+
+    sensor_hum_t     = saul_reg_find_type(SAUL_SENSE_HUM);
+    if (sensor_hum_t == NULL) {
+        DEBUG("[ERROR] Failed to init HUM sensor\n");
+    } else {
+        DEBUG("HUM sensor OK\n");
+    }
+
+    sensor_temp_t    = saul_reg_find_type(SAUL_SENSE_TEMP);
+    if (sensor_temp_t == NULL) {
+		DEBUG("[ERROR] Failed to init TEMP sensor\n");
+	} else {
+		DEBUG("TEMP sensor OK\n");
+	}
+
+    sensor_mag_t     = saul_reg_find_type(SAUL_SENSE_MAG);
+    if (sensor_mag_t == NULL) {
+		DEBUG("[ERROR] Failed to init MAGNETIC sensor\n");
+	} else {
+		DEBUG("MAGNETIC sensor OK\n");
+	}
+
+    sensor_accel_t   = saul_reg_find_type(SAUL_SENSE_ACCEL);
+    if (sensor_accel_t == NULL) {
+		DEBUG("[ERROR] Failed to init ACCEL sensor\n");
+	} else {
+		DEBUG("ACCEL sensor OK\n");
+	}
+
+}
+
 void tx_measure(asic_tetra_t *a, measurement_t *m)
 {
+  phydat_t output; /* Sensor output data (maximum 3-dimension)*/
+  int dim;         /* Demension of sensor output */
+  uint8_t parity;
   msi++;
+  parity = 0;
   msi &= (MSI_MAX-1);
-  msz[msi].seqno = ms_seqno++;
-  msz[msi].build = BUILD_NUMBER;
-  msz[msi].cal_pulse = a->cal_pulse;
-  for (int i = 0; i < 4; i++)
-  {
-    msz[msi].calres[i] = a->calres[i];
-  }
-  memcpy(&(msz[msi].data[0]), &(m->sampledata[0]), 4*70);
-  msz[msi].uptime = m->uptime;
-  msz[msi].primary = m->primary;
-  msz[msi].type = msi+10;
   msz[msi].l7type = L7_TYPE;
+  msz[msi].type = 0;
+  msz[msi].buildnum = BUILD;
+  msz[msi].primary = m->primary;
+  msz[msi].seqno = ms_seqno++;
+  msz[msi].parity = 0;
+
+  /* Magnetic field 3-dim */
+  dim = saul_reg_read(sensor_mag_t, &output);
+  if (dim > 0) {
+      msz[msi].mag_x = output.val[0]; msz[msi].mag_y = output.val[1]; msz[msi].mag_z = output.val[2];
+  } else {
+      DEBUG("[ERROR] Failed to read magnetic field\n");
+  }
+
+  /* Acceleration 3-dim */
+  dim = saul_reg_read(sensor_accel_t, &output);
+  if (dim > 0) {
+      msz[msi].acc_x = output.val[0]; msz[msi].acc_y = output.val[1]; msz[msi].acc_z = output.val[2];
+  } else {
+      printf("[ERROR] Failed to read Acceleration\n");
+  }
+
+
+  /* Temperature 1-dim */
+  dim = saul_reg_read(sensor_temp_t, &output); /* 15ms */
+  if (dim > 0) {
+      msz[msi].hdc_temp = output.val[0];
+  } else {
+      DEBUG("[ERROR] Failed to read Temperature\n");
+  }
+
+  /* Humidity 1-dim */
+  LED_ON;
+  dim = saul_reg_read(sensor_hum_t, &output); /* 15ms */
+  if (dim > 0) {
+      msz[msi].hdc_hum = output.val[0];
+  } else {
+      DEBUG("[ERROR] Failed to read Humidity\n");
+  }
+
+  for(int i = 0;i<3;i++) {
+    uint8_t maxindex = calculate_max_index(m->sampledata[i]);
+    msz[msi].max_index[i] = maxindex;
+    if (maxindex <= 3) {
+      maxindex = 0;
+    } else {
+      maxindex -= 3;
+    }
+    //Copy 4 IQ pairs starting from 3 before the max index, unless the max is right
+    //at the beginning, then start from 0
+    memcpy(&(msz[msi].data[i][0]), &(m->sampledata[i][maxindex<<2]), 16);
+  }
+
+  //Send the calibration result for the primary
+  msz[msi].cal_res = a->calres[m->primary];
+  msz[msi].type = msi+10;
+
+  //Calculate the parity
+  for (int i = 0; i < sizeof(measure_set_t); i++) {
+    parity ^= ((uint8_t*)&msz[msi])[i];
+  }
+  msz[msi].parity = parity;
+
+  LED_ON;
   send_udp("ff02::1",4747,(uint8_t*)&(msz[msi]),sizeof(measure_set_t));
 
   //Clear body of xor message
@@ -80,8 +234,9 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
     }
   }
   //Set the type field to 0x55;
-  xorbuf[2] = 0x55;
+  xorbuf[1] = 0x55;
   send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
+  LED_OFF;
 }
 void initial_program(asic_tetra_t *a)
 {
@@ -196,6 +351,7 @@ void dump_measurement(asic_tetra_t *a, measurement_t *m)
 measurement_t sampm[4];
 void begin(void)
 {
+  sensor_config();
   asic_tetra_t a;
   int8_t e;
   initial_program(&a);
@@ -218,8 +374,7 @@ void begin(void)
       if (e) goto failure;
       for (int p = 0; p < 4; p ++)
       {
-        sampm[p].uptime = xtimer_usec_from_ticks64(xtimer_now64());
-        e = asic_measure(&a, p, &sampm[p]);
+        e = asic_measure_just_iq(&a, p, &sampm[p]);
         if(e) goto failure;
         //dump_measurement(&a, &m);
       }
