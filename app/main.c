@@ -85,7 +85,7 @@ void reboot(void){
 }
 //In a 64 byte array of 16 big endian int16_t pairs of I and Q, what
 //is the index where the complex magnitude is greatest [0,15]?
-uint8_t calculate_max_index(uint8_t *data) {
+uint8_t calculate_max_index(uint8_t *data, uint8_t print) {
   int64_t ix;
   int64_t qx;
   uint64_t magsqr;
@@ -99,11 +99,15 @@ uint8_t calculate_max_index(uint8_t *data) {
     qx = (int16_t) ((uint16_t)data[i<<2] + (((uint16_t)data[(i<<2) + 1]) << 8));
     ix = (int16_t) ((uint16_t)data[(i<<2) + 2] + (((uint16_t)data[(i<<2) + 3]) << 8));
     magsqr = (qx * qx) + (ix * ix);
+    if (print) {
+      printf("%lu ", (long unsigned int)magsqr);
+    }
     if (magsqr > magsqrmax) {
       indexmax = i;
       magsqrmax = magsqr;
     }
   }
+  printf("\n^max: %d\n", indexmax);
   return indexmax;
 }
 
@@ -196,7 +200,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   }
 
   for(int i = 0;i<3;i++) {
-    uint8_t maxindex = calculate_max_index(m->sampledata[i]);
+    uint8_t maxindex = calculate_max_index(m->sampledata[i], m->primary == 0 && i==0);
     msz[msi].max_index[i] = maxindex;
     if (maxindex <= 3) {
       maxindex = 0;

@@ -304,9 +304,9 @@ int8_t read_sample_data(asic_tetra_t *a, uint8_t num, uint8_t *dst)
 int8_t read_16_iq_points(asic_tetra_t *a, uint8_t num, uint8_t *dst)
 {
   #ifdef ROOM_TYPE
-  return _read_reg(a, num, 0x1c, 64, dst);
+  return _read_reg(a, num, 0x1c, 64, &dst[0]);
   #elif defined(DUCT_TYPE)
-  return _read_reg(a, num, 0x4c, 64, dst);
+  return _read_reg(a, num, 0x4c, 64, &dst[0]);
   #else
   #error define type yo, what do you think this is?
   #endif
