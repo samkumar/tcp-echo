@@ -24,9 +24,9 @@
 #define MAIN_QUEUE_SIZE     (8)
 
 #ifdef ROOM_TYPE
-#define BUILD 190
+#define BUILD 200
 #elif defined(DUCT_TYPE)
-#define BUILD 195
+#define BUILD 205
 #endif
 
 //Anemometer v2
@@ -100,14 +100,13 @@ uint8_t calculate_max_index(uint8_t *data, uint8_t print) {
     ix = (int16_t) ((uint16_t)data[(i<<2) + 2] + (((uint16_t)data[(i<<2) + 3]) << 8));
     magsqr = (qx * qx) + (ix * ix);
     if (print) {
-      printf("%lu ", (long unsigned int)magsqr);
+      printf("%8lx ", (long unsigned int)magsqr);
     }
     if (magsqr > magsqrmax) {
       indexmax = i;
       magsqrmax = magsqr;
     }
   }
-  printf("\n^max: %d\n", indexmax);
   return indexmax;
 }
 
@@ -199,8 +198,13 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
       DEBUG("[ERROR] Failed to read Humidity\n");
   }
 
+  for (int i = 0; i < 16; i++) {
+      printf("%8u ", i);
+  }
+  printf(" =======\n");
   for(int i = 0;i<3;i++) {
-    uint8_t maxindex = calculate_max_index(m->sampledata[i], m->primary == 0 && i==0);
+    uint8_t maxindex = calculate_max_index(m->sampledata[i], 1);
+    printf(" p=%d m[%d] = %d\n", m->primary, i, maxindex);
     msz[msi].max_index[i] = maxindex;
     if (maxindex <= 3) {
       maxindex = 0;
