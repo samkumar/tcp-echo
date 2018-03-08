@@ -14,7 +14,6 @@
 #include "saul_reg.h"
 #include <periph/gpio.h>
 #include "asic.h"
-#include "version.h"
 
 // 1 second, defined in us
 #define INTERVAL (1000000U)
@@ -23,11 +22,6 @@
 #define A_LONG_TIME 5000000U
 #define MAIN_QUEUE_SIZE     (8)
 
-#ifdef ROOM_TYPE
-#define BUILD 200
-#elif defined(DUCT_TYPE)
-#define BUILD 205
-#endif
 
 //Anemometer v2
 #define L7_TYPE 9
@@ -119,33 +113,19 @@ saul_reg_t *sensor_accel_t   = NULL;
 
 void sensor_config(void) {
 
-    sensor_hum_t     = saul_reg_find_type(SAUL_SENSE_HUM);
-    if (sensor_hum_t == NULL) {
-        DEBUG("[ERROR] Failed to init HUM sensor\n");
-    } else {
-        DEBUG("HUM sensor OK\n");
-    }
-
-    sensor_temp_t    = saul_reg_find_type(SAUL_SENSE_TEMP);
-    if (sensor_temp_t == NULL) {
-		DEBUG("[ERROR] Failed to init TEMP sensor\n");
-	} else {
-		DEBUG("TEMP sensor OK\n");
-	}
-
     sensor_mag_t     = saul_reg_find_type(SAUL_SENSE_MAG);
     if (sensor_mag_t == NULL) {
-		DEBUG("[ERROR] Failed to init MAGNETIC sensor\n");
-	} else {
-		DEBUG("MAGNETIC sensor OK\n");
-	}
+		  DEBUG("[ERROR] Failed to init MAGNETIC sensor\n");
+  	} else {
+  		DEBUG("MAGNETIC sensor OK\n");
+  	}
 
     sensor_accel_t   = saul_reg_find_type(SAUL_SENSE_ACCEL);
     if (sensor_accel_t == NULL) {
-		DEBUG("[ERROR] Failed to init ACCEL sensor\n");
-	} else {
-		DEBUG("ACCEL sensor OK\n");
-	}
+		  DEBUG("[ERROR] Failed to init ACCEL sensor\n");
+  	} else {
+  		DEBUG("ACCEL sensor OK\n");
+  	}
 
 }
 
@@ -162,6 +142,11 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   msz[msi].buildnum = BUILD;
   msz[msi].primary = m->primary;
   msz[msi].seqno = ms_seqno++;
+  #if defined(DUCT6_TYPE)
+  if (m->primary == 5) {
+    ms_seqno += 2; //for 6 channel skip seqno % 8 == 6/7
+  }
+  #endif
   msz[msi].parity = 0;
 
   /* Magnetic field 3-dim */
@@ -180,31 +165,17 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
       printf("[ERROR] Failed to read Acceleration\n");
   }
 
-
-  /* Temperature 1-dim */
-  dim = saul_reg_read(sensor_temp_t, &output); /* 15ms */
-  if (dim > 0) {
-      msz[msi].hdc_temp = output.val[0];
-  } else {
-      DEBUG("[ERROR] Failed to read Temperature\n");
+  for (int i = 0; i < 6; i++) {
+    printf("calred %d = %d\n", i, a->calres[i]);
   }
-
-  /* Humidity 1-dim */
-  LED_ON;
-  dim = saul_reg_read(sensor_hum_t, &output); /* 15ms */
-  if (dim > 0) {
-      msz[msi].hdc_hum = output.val[0];
-  } else {
-      DEBUG("[ERROR] Failed to read Humidity\n");
-  }
-
-  for (int i = 0; i < 16; i++) {
-      printf("%8u ", i);
-  }
-  printf(" =======\n");
+  //
+  // for (int i = 0; i < 16; i++) {
+  //     printf("%8u ", i);
+  // }
+  // printf(" =======\n");
   for(int i = 0;i<3;i++) {
-    uint8_t maxindex = calculate_max_index(m->sampledata[i], 1);
-    printf(" p=%d m[%d] = %d\n", m->primary, i, maxindex);
+    uint8_t maxindex = calculate_max_index(m->sampledata[i], 0);
+    //printf(" p=%d m[%d] = %d\n", m->primary, i, maxindex);
     msz[msi].max_index[i] = maxindex;
     if (maxindex <= 3) {
       maxindex = 0;
@@ -226,7 +197,6 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   }
   msz[msi].parity = parity;
 
-  LED_ON;
   send_udp("ff02::1",4747,(uint8_t*)&(msz[msi]),sizeof(measure_set_t));
 
   //Clear body of xor message
@@ -244,21 +214,22 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   //Set the type field to 0x55;
   xorbuf[1] = 0x55;
   send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
-  LED_OFF;
 }
 void initial_program(asic_tetra_t *a)
 {
   int8_t e;
   e = (int)asic_init(a, I2C_0);
-  asic_led(a, 1,1,0);
+  printf("[init] asic_init return with %d\n", e);
+
+  asic_led(a, 1, 1, 1);
   printf("[init] first errcode was %d\n", e);
   uint8_t bad = 0;
-  for (int i = 0; i < 4; i ++)
+  for (int i = 0; i < NUMASICS; i ++)
   {
     e = asic_program(a, i);
     printf("[init] program pass 1 for %d code was %d\n", i, e);
   }
-  for (int i = 0; i < 4; i ++)
+  for (int i = 0; i < NUMASICS; i ++)
   {
     e = asic_program(a, i);
     if (e) bad = 1;
@@ -266,7 +237,7 @@ void initial_program(asic_tetra_t *a)
   }
   asic_led(a, 1,0,1);
   xtimer_usleep(100000); //100ms
-  for (int i = 0; i < 4; i ++)
+  for (int i = 0; i < NUMASICS; i ++)
   {
     e = asic_configure(a, i);
     if (e) bad = 1;
@@ -282,7 +253,7 @@ void initial_program(asic_tetra_t *a)
   asic_all_out_of_reset(a);
   xtimer_usleep(100000); //100ms
   bad = 0;
-  for (int i = 0; i < 4; i ++)
+  for (int i = 0; i < NUMASICS; i ++)
   {
     e = asic_check_ready(a, i);
     if (e) bad = 1;
@@ -371,22 +342,16 @@ void begin(void)
   }
   while (1)
   {
-    //for (int8_t i = 0; i < 4; i++)
-    //{
-    //  printf("[cal] ASIC %d measured %d\n", i, a.calres[i]);
-    //}
-
     for (int i = 0; i < 128; i++)
     {
       e = asic_fake_measure(&a);
       if (e) goto failure;
-      for (int p = 0; p < 4; p ++)
+      for (int p = 0; p < NUMASICS; p ++)
       {
         e = asic_measure_just_iq(&a, p, &sampm[p]);
         if(e) goto failure;
-        //dump_measurement(&a, &m);
       }
-      for (int p = 0; p < 4; p ++)
+      for (int p = 0; p < NUMASICS; p ++)
       {
         tx_measure(&a, &sampm[p]);
       }
@@ -402,7 +367,7 @@ failure:
 int main(void)
 {
     msg_init_queue(_main_msg_queue, MAIN_QUEUE_SIZE);
-    printf("[init] booting build b%d\n",BUILD_NUMBER);
+    printf("[init] booting build b%d\n",BUILD);
     begin();
 
     return 0;

@@ -1,0 +1,16 @@
+; aux row 0x804000
+; D8E0C7FF FFFFFC5D
+; d8e087ff FFFFFC5D
+; nvm control 0x41004000
+; cmdex = 0x41004000
+; set ADDR to NVM USER ROW
+w4 0x4100401C, 0x804000
+; erase NVM USER ROW
+w2 0x41004000, 0xA505
+; clear the page buffer
+w2 0x41004000, 0xA544
+; write the nvm user row
+w4 0x804000 d8e087ff FFFFFC5D
+; write the aux thing
+w2 0x41004000, 0xA506
+exit 0

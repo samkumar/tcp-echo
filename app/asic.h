@@ -7,12 +7,26 @@
 #define ENABLE_DEBUG    (0)
 #include "debug.h"
 
+#ifdef ROOM_TYPE
+#define BUILD 210
+#define NUMASICS 4
+#elif defined(DUCT_TYPE)
+#define BUILD 215
+#define NUMASICS 4
+#elif defined(DUCT6_TYPE)
+#define BUILD 217
+#define NUMASICS 6
+#endif
+
+
 typedef struct {
   i2c_t   i2c;
-  uint8_t addr [4];
-  uint8_t shadowH;
-  uint8_t shadowL;
-  uint16_t calres [4];
+  uint8_t addr [6];
+  uint8_t shadowHA;
+  uint8_t shadowLA;
+  uint8_t shadowHB;
+  uint8_t shadowLB;
+  uint16_t calres [6];
   uint16_t cal_pulse;
 } asic_tetra_t;
 

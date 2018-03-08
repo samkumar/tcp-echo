@@ -4,8 +4,9 @@ RIOTBASE = $(CURDIR)/../RIOT-OS
 BOARD = hamilton
 
 CFLAGS += -DMODEL_3C
-CFLAGS += -DROOM_TYPE
+#CFLAGS += -DROOM_TYPE
 #CFLAGS += -DDUCT_TYPE
+CFLAGS += -DDUCT6_TYPE
 
 # System functions
 USEMODULE += random
@@ -19,16 +20,17 @@ CFLAGS    += -DTHREAD_STACKSIZE_DEFAULT=2048
 CFLAGS    += -DCLOCK_USE_OSCULP32_DFLL=1
 CFLAGS    += -DCLOCK_USE_ADAPTIVE=0
 CFLAGS    += -DDMAC_ENABLE=0
+CFLAGS    += -DVDD=1800
 
 # Sensors
 USEMODULE += saul_reg        # SAUL: sensor/actuator abstraction layer
 USEMODULE += auto_init_saul
-USEMODULE += tmp006          # ambient temperature
-USEMODULE += hdc1000         # humidity and temperature
+#USEMODULE += tmp006          # ambient temperature
+# USEMODULE += hdc1000         # humidity and temperature
 USEMODULE += fxos8700        # acceleration and magnetic field
-USEMODULE += apds9007        # illumination
-USEMODULE += ekmb            # pir-based occupancy
-USEMODULE += pulse_counter   # simple push button
+# USEMODULE += apds9007        # illumination
+# USEMODULE += ekmb            # pir-based occupancy
+# USEMODULE += pulse_counter   # simple push button
 
 # Security
 USEMODULE += crypto
