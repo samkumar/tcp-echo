@@ -22,6 +22,7 @@
 #define A_LONG_TIME 5000000U
 #define MAIN_QUEUE_SIZE     (8)
 
+#define DIRECT_DATA_ADDRESS 0x65
 
 //Anemometer v2
 #define L7_TYPE 9
@@ -214,6 +215,13 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   //Set the type field to 0x55;
   xorbuf[1] = 0x55;
   send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
+
+  //Also write the packet to I2C_0
+  i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, "cafebabe",8);
+  i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
+  for (int i = 0; i < 3; i++) {
+    i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64),
+  }
 }
 void initial_program(asic_tetra_t *a)
 {
