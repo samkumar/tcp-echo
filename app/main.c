@@ -14,6 +14,55 @@
 #include "saul_reg.h"
 #include <periph/gpio.h>
 #include "asic.h"
+#include "mutex.h"
+#include "cond.h"
+
+#include "anemometer.h"
+
+
+/* I need these variables to make OpenThread compile. */
+uint16_t myRloc = 0;
+
+#ifdef CPU_DUTYCYCLE_MONITOR
+volatile uint64_t cpuOnTime = 0;
+volatile uint64_t cpuOffTime = 0;
+volatile uint32_t contextSwitchCnt = 0;
+volatile uint32_t preemptCnt = 0;
+#endif
+#ifdef RADIO_DUTYCYCLE_MONITOR
+uint64_t radioOnTime = 0;
+uint64_t radioOffTime = 0;
+#endif
+
+uint32_t packetSuccessCnt = 0;
+uint32_t packetFailCnt = 0;
+uint32_t packetBusyChannelCnt = 0;
+uint32_t broadcastCnt = 0;
+uint32_t queueOverflowCnt = 0;
+
+uint16_t nextHopRloc = 0;
+uint8_t borderRouterLC = 0;
+uint8_t borderRouterRC = 0;
+uint32_t routeChangeCnt = 0;
+uint32_t borderRouteChangeCnt = 0;
+
+uint32_t totalIpv6MsgCnt = 0;
+uint32_t Ipv6TxSuccCnt = 0;
+uint32_t Ipv6TxFailCnt = 0;
+uint32_t Ipv6RxSuccCnt = 0;
+uint32_t Ipv6RxFailCnt = 0;
+
+uint32_t pollMsgCnt = 0;
+uint32_t mleMsgCnt = 0;
+
+uint32_t mleRouterMsgCnt = 0;
+uint32_t addrMsgCnt = 0;
+uint32_t netdataMsgCnt = 0;
+
+uint32_t meshcopMsgCnt = 0;
+uint32_t tmfMsgCnt = 0;
+
+uint32_t totalSerialMsgCnt = 0;
 
 // 1 second, defined in us
 #define INTERVAL (1000000U)
@@ -23,39 +72,18 @@
 #define MAIN_QUEUE_SIZE     (8)
 #define TMP_I2C_ADDRESS 0x40
 #define DIRECT_DATA_ADDRESS 0x65
+#define OPENTHREAD_INIT_TIME 5000000ul
 
 //Anemometer v2
 #define L7_TYPE 9
 
-static msg_t _main_msg_queue[MAIN_QUEUE_SIZE];
+/* Variables for communicating with TCP thread. */
+extern measure_set_t reading;
+extern bool reading_ready;
+extern mutex_t ready_mutex;
+extern cond_t ready_cond;
 
 uint16_t ms_seqno = 0;
-
-#define XOR_OFFSET 4
-
-typedef struct __attribute__((packed))
-{
-  uint8_t   l7type;     // 0
-  uint8_t   type;       // 1
-  uint16_t  seqno;      // 2:3
-  uint8_t   primary;    // 4
-  uint8_t   buildnum;   // 5
-  int16_t   acc_x;      // 6:7
-  int16_t   acc_y;      // 8:9
-  int16_t   acc_z;      // 10:11
-  int16_t   mag_x;      // 12:13
-  int16_t   mag_y;      // 14:15
-  int16_t   mag_z;      // 16:17
-  uint16_t  temp;        // 18:19
-  int16_t   reserved;    // 20:21
-  uint8_t   max_index[3]; // 22:24
-  uint8_t   parity;    // 25
-  uint16_t  cal_res;   // 26:27
-  //Packed IQ data for 4 pairs
-  //M-3, M-2, M-1, M
-  uint8_t data[3][16];  //28:75
-  uint16_t tof_sf[3];   //76:81
-} measure_set_t; //82 bytes
 
 typedef struct
 {
@@ -67,25 +95,6 @@ typedef struct
   int16_t mag_y;
   int16_t mag_z;
 } physical_sensors_t;
-
-// typedef struct __attribute__((packed))
-// {
-//   uint16_t l7type;
-//   uint8_t type;
-//   uint16_t seqno;
-//   uint16_t build;
-//   uint16_t cal_pulse;
-//   uint16_t calres[4];
-//   uint64_t uptime;
-//   uint8_t primary;
-//   uint8_t data[4][70];
-// } measure_set_t;
-
-#define MSI_MAX 4
-uint8_t msi;
-measure_set_t msz[MSI_MAX];
-uint8_t xorbuf [sizeof(measure_set_t)];
-extern void send_udp(char *addr_str, uint16_t port, uint8_t *data, uint16_t datalen);
 
 void reboot(void){
   NVIC_SystemReset();
@@ -195,28 +204,28 @@ void populate_phy_sense(physical_sensors_t *phy)
 void tx_measure(asic_tetra_t *a, measurement_t *m, physical_sensors_t *phy)
 {
   uint8_t parity;
-  msi++;
+  measure_set_t ms;
   parity = 0;
-  msi &= (MSI_MAX-1);
-  msz[msi].l7type = L7_TYPE;
-  msz[msi].type = 0;
-  msz[msi].buildnum = BUILD;
-  msz[msi].primary = m->primary;
-  msz[msi].seqno = ms_seqno++;
+  ms.l7type = L7_TYPE;
+  ms.type = 0;
+  ms.buildnum = BUILD;
+  ms.primary = m->primary;
+  ms.seqno = ms_seqno++;
   #if defined(DUCT6_TYPE)
   if (m->primary == 5) {
     ms_seqno += 2; //for 6 channel skip seqno % 8 == 6/7
   }
   #endif
-  msz[msi].parity = 0;
+  ms.parity = 0;
 
-  msz[msi].temp = phy->temp;
-  msz[msi].acc_x = phy->acc_x;
-  msz[msi].acc_y = phy->acc_y;
-  msz[msi].acc_z = phy->acc_z;
-  msz[msi].mag_x = phy->mag_x;
-  msz[msi].mag_y = phy->mag_y;
-  msz[msi].mag_z = phy->mag_z;
+
+  ms.temp = phy->temp;
+  ms.acc_x = phy->acc_x;
+  ms.acc_y = phy->acc_y;
+  ms.acc_z = phy->acc_z;
+  ms.mag_x = phy->mag_x;
+  ms.mag_y = phy->mag_y;
+  ms.mag_z = phy->mag_z;
   //
   // for (int i = 0; i < 16; i++) {
   //     printf("%8u ", i);
@@ -225,7 +234,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m, physical_sensors_t *phy)
   for(int i = 0;i<3;i++) {
     uint8_t maxindex = calculate_max_index(m->sampledata[i], 0);
   //  printf(" p=%d m[%d] = %d\n\n", m->primary, i, maxindex);
-    msz[msi].max_index[i] = maxindex + m->offset[i];
+    ms.max_index[i] = maxindex + m->offset[i];
     if (maxindex <= 3) {
       maxindex = 0;
     } else {
@@ -233,49 +242,39 @@ void tx_measure(asic_tetra_t *a, measurement_t *m, physical_sensors_t *phy)
     }
     //Copy 4 IQ pairs starting from 3 before the max index, unless the max is right
     //at the beginning, then start from 0
-    memcpy(&(msz[msi].data[i][0]), &(m->sampledata[i][maxindex<<2]), 16);
-    msz[msi].tof_sf[i] = m->tof_sf[i];
+    memcpy(&(ms.data[i][0]), &(m->sampledata[i][maxindex<<2]), 16);
+    ms.tof_sf[i] = m->tof_sf[i];
   }
 
   //Send the calibration result for the primary
-  msz[msi].cal_res = a->calres[m->primary];
-  msz[msi].type = msi+10;
+  ms.cal_res = a->calres[m->primary];
+  //ms.type = msi+10;
 
   //Calculate the parity
   for (int i = 0; i < sizeof(measure_set_t); i++) {
-    parity ^= ((uint8_t*)&msz[msi])[i];
+    parity ^= ((uint8_t*)&ms)[i];
   }
-  msz[msi].parity = parity;
-  //printf("sent seqno %d\n", msz[msi].seqno);
-  send_udp("ff02::1",4747,(uint8_t*)&(msz[msi]),sizeof(measure_set_t));
+  ms.parity = parity;
 
-  //Clear body of xor message
-  memset(xorbuf+XOR_OFFSET, 0, sizeof(measure_set_t)-XOR_OFFSET);
-  //Copy the header (L7Type and seqno)
-  memcpy(xorbuf, (uint8_t*)&msz[msi], XOR_OFFSET);
-  for(int i = 0; i < MSI_MAX; i++)
-  {
-    uint8_t *paybuf = ((uint8_t*)&msz[i]);
-    for (int k = XOR_OFFSET; k < sizeof(measure_set_t);k++)
-    {
-      xorbuf[k] ^= paybuf[k];
-    }
-  }
-  //Set the type field to 0x55;
-  xorbuf[1] = 0x55;
-  //send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
+  mutex_lock(&ready_mutex);
+  memcpy(&reading, &ms, sizeof(reading));
+  reading_ready = true;
+  cond_signal(&ready_cond);
+  mutex_unlock(&ready_mutex);
 
-  int rv = i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, "cafebabe",8);
+  //Also write the packet to I2C_1
+  int rv = i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, "cafebabe", 8);
   if (rv != 8) {
     //printf("failed to write direct data %d\n", rv);
   } else {
     //printf("cafebabe acked\n");
-    i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
+    i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*) &ms, sizeof(measure_set_t));
     for (int i = 0; i < 3; i++) {
-      i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64);
+      i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*) &(m->sampledata[i][0]), 64);
     }
   }
 }
+
 void initial_program(asic_tetra_t *a)
 {
   int8_t e;
@@ -435,8 +434,9 @@ failure:
 }
 int main(void)
 {
-    msg_init_queue(_main_msg_queue, MAIN_QUEUE_SIZE);
     printf("[init] booting build b%d\n",BUILD);
+    xtimer_usleep(OPENTHREAD_INIT_TIME);
+    start_sendloop();
     begin();
 
     return 0;
