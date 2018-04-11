@@ -166,9 +166,6 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
       printf("[ERROR] Failed to read Acceleration\n");
   }
 
-  for (int i = 0; i < 6; i++) {
-    printf("calred %d = %d\n", i, a->calres[i]);
-  }
   //
   // for (int i = 0; i < 16; i++) {
   //     printf("%8u ", i);
@@ -197,7 +194,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
     parity ^= ((uint8_t*)&msz[msi])[i];
   }
   msz[msi].parity = parity;
-
+  //printf("sent seqno %d\n", msz[msi].seqno);
   send_udp("ff02::1",4747,(uint8_t*)&(msz[msi]),sizeof(measure_set_t));
 
   //Clear body of xor message
@@ -217,11 +214,12 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
 
   //Also write the packet to I2C_0
-  i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, "cafebabe",8);
-  i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
-  for (int i = 0; i < 3; i++) {
-    i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64),
-  }
+  // This works
+  // i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, "cafebabe",8);
+  // i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
+  // for (int i = 0; i < 3; i++) {
+  //   i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64);
+  // }
 }
 void initial_program(asic_tetra_t *a)
 {
@@ -359,6 +357,7 @@ void begin(void)
         e = asic_measure_just_iq(&a, p, &sampm[p]);
         if(e) goto failure;
       }
+      //printf("transmitting measurement set\n");
       for (int p = 0; p < NUMASICS; p ++)
       {
         tx_measure(&a, &sampm[p]);
