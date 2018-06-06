@@ -94,7 +94,7 @@ int8_t write_pex_a(asic_tetra_t *a)
   buf[0] = 0x02;
   buf[1] = a->shadowLA;
   buf[2] = a->shadowHA;
-  if (i2c_write_bytes(a->i2c, PEX_ADDR_A, (char*)buf, 3) != 3)
+  if (i2c_write_bytes(a->pex_i2c, PEX_ADDR_A, (char*)buf, 3) != 3)
     return E_FAIL;
   return E_OK;
 }
@@ -104,7 +104,7 @@ int8_t write_pex_b(asic_tetra_t *a)
   buf[0] = 0x02;
   buf[1] = a->shadowLB;
   buf[2] = a->shadowHB;
-  if (i2c_write_bytes(a->i2c, PEX_ADDR_B, (char*)buf, 3) != 3)
+  if (i2c_write_bytes(a->pex_i2c, PEX_ADDR_B, (char*)buf, 3) != 3)
     return E_FAIL;
   return E_OK;
 }
@@ -121,9 +121,10 @@ void attempt_clockout_hack(i2c_t i2c) {
   }
   i2c_init_master(i2c, I2C_SPEED_NORMAL);
 }
-int8_t asic_init(asic_tetra_t *a, i2c_t i2c)
+int8_t asic_init(asic_tetra_t *a, i2c_t pex_i2c, i2c_t asic_i2c)
 {
-  a->i2c = i2c;
+  a->pex_i2c = pex_i2c;
+  a->asic_i2c = asic_i2c;
   a->addr[0] = 0x30;
   a->addr[1] = 0x32;
   a->addr[2] = 0x33;
@@ -136,47 +137,51 @@ int8_t asic_init(asic_tetra_t *a, i2c_t i2c)
   a->shadowLB = 0xFF;
 
   // acquire exclusive access to the bus
-  if (i2c_acquire(i2c))
+  if (i2c_acquire(pex_i2c))
     return E_FAIL;
 
   // initialize the I2C bus
-  if (i2c_init_master(i2c, I2C_SPEED_NORMAL))
+  if (i2c_init_master(pex_i2c, I2C_SPEED_FAST))
     return E_FAIL;
 
   // initialize the port expander
   uint8_t buf [3];
   buf[0] = 0x06; //write to cfg port A.0
   buf[1] = 0; //All output
-  if (i2c_write_bytes(i2c, PEX_ADDR_A, (char*)buf, 2) != 2) {
-    // printf("[init] USING CLOCKOUT HACK\n");
-    // attempt_clockout_hack(i2c);
-    // if (i2c_write_bytes(i2c, PEX_ADDR_A, (char*)buf, 2) != 2) {
-    //   printf("CLOCKOUT HACK FAILED\n");
-    //   return E_FAIL;
-    // }
-    // printf("CLOCKOUT HACK SUCCEEDED\n");
+  if (i2c_write_bytes(pex_i2c, PEX_ADDR_A, (char*)buf, 2) != 2) {
     return E_FAIL;
   }
 
 
   buf[0] = 0x07; //write to cfg port A.1
   buf[1] = 0; //All output
-  if (i2c_write_bytes(i2c, PEX_ADDR_A, (char*)buf, 2) != 2)
+  if (i2c_write_bytes(pex_i2c, PEX_ADDR_A, (char*)buf, 2) != 2)
     return E_FAIL;
 
   buf[0] = 0x06; //write to cfg port B.0
   buf[1] = 0; //All output
-  if (i2c_write_bytes(i2c, PEX_ADDR_B, (char*)buf, 2) != 2)
+  if (i2c_write_bytes(pex_i2c, PEX_ADDR_B, (char*)buf, 2) != 2)
     return E_FAIL;
 
   buf[0] = 0x07; //write to cfg port B.1
   buf[1] = 0xFF; //All input
-  if (i2c_write_bytes(i2c, PEX_ADDR_B, (char*)buf, 2) != 2)
+  if (i2c_write_bytes(pex_i2c, PEX_ADDR_B, (char*)buf, 2) != 2)
     return E_FAIL;
 
   write_pex_b(a);
 
-  if (i2c_release(i2c))
+  if (i2c_release(pex_i2c))
+    return E_FAIL;
+
+  // acquire exclusive access to the bus
+  if (i2c_acquire(asic_i2c))
+    return E_FAIL;
+
+  // initialize the I2C bus
+  if (i2c_init_master(asic_i2c, I2C_SPEED_FAST))
+    return E_FAIL;
+
+  if (i2c_release(asic_i2c))
     return E_FAIL;
 
   if (gpio_init(GINT, GPIO_OUT))
@@ -216,7 +221,7 @@ void pex_clr_b(asic_tetra_t *a, uint16_t bits)
 }
 int8_t asic_led(asic_tetra_t *a, uint8_t red, uint8_t green, uint8_t orange)
 {
-  if (i2c_acquire(a->i2c))
+  if (i2c_acquire(a->pex_i2c))
     return E_FAIL;
   if (red) {
     pex_set_a(a, PXA_LED_1);
@@ -234,7 +239,7 @@ int8_t asic_led(asic_tetra_t *a, uint8_t red, uint8_t green, uint8_t orange)
     pex_clr_a(a, PXA_LED_0);
   }
   int8_t e = write_pex_a(a);
-  int8_t e2 = i2c_release(a->i2c);
+  int8_t e2 = i2c_release(a->pex_i2c);
   if (e) return e;
   if (e2) return e2;
   return E_OK;
@@ -278,11 +283,11 @@ int8_t _write_reg(asic_tetra_t *a, uint8_t num, uint8_t addr, uint8_t len, uint8
   buf[0] = addr;
   buf[1] = len;
   for (int i = 0; i < len; i++) buf[2+i] = src[i];
-  return (i2c_write_bytes(a->i2c, a->addr[num], (char*)buf, len+2) == len+2) ? E_OK : E_FAIL;
+  return (i2c_write_bytes(a->asic_i2c, a->addr[num], (char*)buf, len+2) == len+2) ? E_OK : E_FAIL;
 }
 int8_t _read_reg(asic_tetra_t *a, uint8_t num, uint8_t addr, uint8_t len, uint8_t *dst)
 {
-  int rv = i2c_read_regs(a->i2c, a->addr[num], addr, (char*)dst, len);
+  int rv = i2c_read_regs(a->asic_i2c, a->addr[num], addr, (char*)dst, len);
   if(rv != len) {
     printf("got rv %d\n", rv);
     return E_FAIL;
@@ -301,9 +306,9 @@ int8_t check_ready(asic_tetra_t *a, uint8_t num)
 }
 int8_t asic_check_ready(asic_tetra_t *a, uint8_t num)
 {
-  if (i2c_acquire(a->i2c)) return E_FAIL;
+  if (i2c_acquire(a->asic_i2c)) return E_FAIL;
   int8_t e = check_ready(a, num);
-  if (i2c_release(a->i2c)) return E_FAIL;
+  if (i2c_release(a->asic_i2c)) return E_FAIL;
   return e;
 }
 //The i2c lock must be held
@@ -331,7 +336,7 @@ int8_t asic_calibrate(asic_tetra_t *a)
 {
   int8_t e;
   set_gint(a, 0);
-  if (i2c_acquire(a->i2c)) return -2;
+  if (i2c_acquire(a->asic_i2c)) return -2;
   for (int8_t i = 0; i < NUMASICS; i++)
   {
     e = prime_calibrate(a, i);
@@ -352,7 +357,7 @@ int8_t asic_calibrate(asic_tetra_t *a)
   //  xtimer_usleep(200);
   }
   end:
-  if (i2c_release(a->i2c)) return E_FAIL;
+  if (i2c_release(a->asic_i2c)) return E_FAIL;
   return e;
 }
 
@@ -389,7 +394,7 @@ int8_t read_16_iq_points(asic_tetra_t *a, uint8_t num, uint8_t *dst)
 }
 int8_t asic_program(asic_tetra_t *a, uint8_t num)
 {
-  if (i2c_acquire(a->i2c)) return -10;
+  if (i2c_acquire(a->asic_i2c)) return -10;
   if (cfg_rst(a, num, 0)) return -11;
   if (cfg_prog(a, num, 1)) return -12;
   if (cfg_rst(a, num, 1)) return -13;
@@ -398,78 +403,78 @@ int8_t asic_program(asic_tetra_t *a, uint8_t num)
   buf[0] = PROG_ADDR;
   buf[1] = 0x00;
   buf[2] = 0xF8;
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*) buf, 3) != 3) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*) buf, 3) != 3) {
+    i2c_release(a->asic_i2c);
     return -14;
   }
   buf[0] = PROG_CNT;
   buf[1] = 0xFF;
   buf[2] = 0x07;
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*) buf, 3) != 3) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*) buf, 3) != 3) {
+    i2c_release(a->asic_i2c);
     return -15;
   }
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*)ASIC_FIRMWARE_ARRAY, sizeof(ASIC_FIRMWARE_ARRAY)) != sizeof(ASIC_FIRMWARE_ARRAY)) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*)ASIC_FIRMWARE_ARRAY, sizeof(ASIC_FIRMWARE_ARRAY)) != sizeof(ASIC_FIRMWARE_ARRAY)) {
+    i2c_release(a->asic_i2c);
     return -16;
   }
   buf[0] = PROG_ADDR;
   buf[1] = 0xC5;
   buf[2] = 0x01;
-  if (i2c_write_bytes(a->i2c,DEF_ADDR, (char*) buf, 3) != 3) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c,DEF_ADDR, (char*) buf, 3) != 3) {
+    i2c_release(a->asic_i2c);
     return -17;
   }
   buf[0] = PROG_DATA;
   buf[1] = a->addr[num];
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*) buf, 2) != 2) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*) buf, 2) != 2) {
+    i2c_release(a->asic_i2c);
     return -18;
   }
   buf[0] = PROG_CTL;
   buf[1] = 0x0B;
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*) buf, 2) != 2) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*) buf, 2) != 2) {
+    i2c_release(a->asic_i2c);
     return -19;
   }
   buf[0] = PROG_CPU;
   buf[1] = 0x02;
-  if (i2c_write_bytes(a->i2c, DEF_ADDR, (char*) buf, 2) != 2) {
-    i2c_release(a->i2c);
+  if (i2c_write_bytes(a->asic_i2c, DEF_ADDR, (char*) buf, 2) != 2) {
+    i2c_release(a->asic_i2c);
     return -20;
   }
   if (cfg_prog(a, num, 0)) return -22;
   //if (cfg_rst(a, num, 0)) return -23;
-  if (i2c_release(a->i2c)) return -21;
+  if (i2c_release(a->asic_i2c)) return -21;
   //leave it in reset
   return E_OK;
 }
 int8_t asic_all_out_of_reset(asic_tetra_t *a)
 {
-  if (i2c_acquire(a->i2c)) return -2;
+  if (i2c_acquire(a->asic_i2c)) return -2;
   for (int8_t i = 0; i < NUMASICS; i++)
   {
     if (cfg_rst(a, i, 1)) return -3;
   }
-  if (i2c_release(a->i2c)) return -4;
+  if (i2c_release(a->asic_i2c)) return -4;
   return E_OK;
 }
 int8_t asic_configure(asic_tetra_t *a, uint8_t num)
 {
-  if (i2c_acquire(a->i2c)) return -2;
+  if (i2c_acquire(a->asic_i2c)) return -2;
   if (cfg_rst(a, num, 1)) return -3;
   if (set_max_range(a, num, DEF_MAXRANGE)) return -4;
   if (cfg_int_en(a, num, 1)) return -5;
 
   //moar?
-  if (i2c_release(a->i2c)) return -5;
+  if (i2c_release(a->asic_i2c)) return -5;
   return E_OK;
 }
 
 int8_t asic_fake_measure(asic_tetra_t *a)
 {
   int8_t e;
-  if (i2c_acquire(a->i2c)) return E_FAIL;
+  if (i2c_acquire(a->asic_i2c)) return E_FAIL;
   for (int i = 0; i < NUMASICS; i++)
   {
     e = set_opmode(a, i, MODE_RX);
@@ -481,7 +486,7 @@ int8_t asic_fake_measure(asic_tetra_t *a)
   xtimer_usleep(SAMPLE_US);
   e = E_OK;
   fail:
-  i2c_release(a->i2c);
+  i2c_release(a->asic_i2c);
   return e;
 }
 // int8_t asic_measure(asic_tetra_t *a, uint8_t primary, measurement_t *m)
@@ -522,7 +527,7 @@ int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
 {
   int8_t e;
   int slotindex = 0;
-  if (i2c_acquire(a->i2c)) return E_FAIL;
+  if (i2c_acquire(a->asic_i2c)) return E_FAIL;
   for (int i = 0; i < NUMASICS; i++)
   {
     if (i == primary)
@@ -533,6 +538,7 @@ int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
     {
       e = set_opmode(a, i, MODE_RX);
     }
+
     if (e) goto fail;
   }
   set_gint(a, 1);
@@ -564,6 +570,6 @@ int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
   m->primary = primary;
   e = E_OK;
   fail:
-  i2c_release(a->i2c);
+  i2c_release(a->asic_i2c);
   return e;
 }

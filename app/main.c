@@ -21,7 +21,7 @@
 #define COUNT_TX (-4)
 #define A_LONG_TIME 5000000U
 #define MAIN_QUEUE_SIZE     (8)
-
+#define TMP_I2C_ADDRESS 0x40
 #define DIRECT_DATA_ADDRESS 0x65
 
 //Anemometer v2
@@ -46,8 +46,8 @@ typedef struct __attribute__((packed))
   int16_t   mag_x;      // 12:13
   int16_t   mag_y;      // 14:15
   int16_t   mag_z;      // 16:17
-  int16_t   hdc_temp;   // 18:19
-  int16_t   hdc_hum;    // 20:21
+  uint16_t   temp;   // 18:19
+  int16_t   reserved;    // 20:21
   uint8_t   max_index[3]; // 22:24
   uint8_t   parity;    // 25
   uint16_t  cal_res;   // 26:27
@@ -106,8 +106,6 @@ uint8_t calculate_max_index(uint8_t *data, uint8_t print) {
 }
 
 
-saul_reg_t *sensor_temp_t    = NULL;
-saul_reg_t *sensor_hum_t     = NULL;
 saul_reg_t *sensor_mag_t     = NULL;
 saul_reg_t *sensor_accel_t   = NULL;
 
@@ -117,6 +115,7 @@ void sensor_config(void) {
     sensor_mag_t     = saul_reg_find_type(SAUL_SENSE_MAG);
     if (sensor_mag_t == NULL) {
 		  DEBUG("[ERROR] Failed to init MAGNETIC sensor\n");
+      reboot();
   	} else {
   		DEBUG("MAGNETIC sensor OK\n");
   	}
@@ -124,16 +123,42 @@ void sensor_config(void) {
     sensor_accel_t   = saul_reg_find_type(SAUL_SENSE_ACCEL);
     if (sensor_accel_t == NULL) {
 		  DEBUG("[ERROR] Failed to init ACCEL sensor\n");
+      reboot();
   	} else {
   		DEBUG("ACCEL sensor OK\n");
   	}
 
 }
 
+void init_temperature_sensor(void) {
+
+}
+
+uint16_t read_temperature_sensor(void) {
+  if (i2c_acquire(I2C_0)) return 0;
+  int rv = i2c_write_bytes(I2C_0, TMP_I2C_ADDRESS, "\xf3",1);
+  if (rv != 1) {
+    i2c_release(I2C_0);
+    return 0;
+  }
+  char data [2];
+  for (int i = 0; i < 2000; i++) {
+    rv = i2c_read_bytes(I2C_0, TMP_I2C_ADDRESS, &data[0], 2);
+    if (rv == 2) {
+      i2c_release(I2C_0);
+      return ((uint16_t)(data[0])<<8) + ((uint16_t)data[1]);
+    }
+  }
+  printf("TMP TIMED OUT\n");
+  i2c_release(I2C_0);
+  return 0;
+}
+
 void tx_measure(asic_tetra_t *a, measurement_t *m)
 {
   phydat_t output; /* Sensor output data (maximum 3-dimension)*/
   int dim;         /* Demension of sensor output */
+  int16_t temperature;
   uint8_t parity;
   msi++;
   parity = 0;
@@ -156,6 +181,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
       msz[msi].mag_x = output.val[0]; msz[msi].mag_y = output.val[1]; msz[msi].mag_z = output.val[2];
   } else {
       DEBUG("[ERROR] Failed to read magnetic field\n");
+      reboot();
   }
 
   /* Acceleration 3-dim */
@@ -164,8 +190,11 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
       msz[msi].acc_x = output.val[0]; msz[msi].acc_y = output.val[1]; msz[msi].acc_z = output.val[2];
   } else {
       printf("[ERROR] Failed to read Acceleration\n");
+      reboot();
   }
 
+  temperature = read_temperature_sensor();
+  msz[msi].temp = temperature;
   //
   // for (int i = 0; i < 16; i++) {
   //     printf("%8u ", i);
@@ -213,18 +242,21 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   xorbuf[1] = 0x55;
   send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
 
-  //Also write the packet to I2C_0
-  // This works
-  // i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, "cafebabe",8);
-  // i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
-  // for (int i = 0; i < 3; i++) {
-  //   i2c_write_bytes(I2C_0, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64);
-  // }
+  int rv = i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, "cafebabe",8);
+  if (rv != 8) {
+    //printf("failed to write direct data %d\n", rv);
+  } else {
+    //printf("cafebabe acked\n");
+    i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*)&(msz[msi]),sizeof(measure_set_t));
+    for (int i = 0; i < 3; i++) {
+      i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, (uint8_t*)&(m->sampledata[i][0]), 64);
+    }
+  }
 }
 void initial_program(asic_tetra_t *a)
 {
   int8_t e;
-  e = (int)asic_init(a, I2C_0);
+  e = (int)asic_init(a, I2C_1, I2C_0);
   printf("[init] asic_init return with %d\n", e);
 
   asic_led(a, 1, 1, 1);
@@ -333,7 +365,7 @@ void dump_measurement(asic_tetra_t *a, measurement_t *m)
   }
 }
 #endif
-measurement_t sampm[4];
+measurement_t sampm[6];
 void begin(void)
 {
   sensor_config();

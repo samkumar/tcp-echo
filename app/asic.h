@@ -20,7 +20,8 @@
 
 
 typedef struct {
-  i2c_t   i2c;
+  i2c_t   pex_i2c;
+  i2c_t   asic_i2c;
   uint8_t addr [6];
   uint8_t shadowHA;
   uint8_t shadowLA;
@@ -36,7 +37,7 @@ typedef struct {
   uint8_t primary;
 } measurement_t;
 
-int8_t asic_init(asic_tetra_t *a, i2c_t i2c);
+int8_t asic_init(asic_tetra_t *a, i2c_t pex_i2c, i2c_t asic_i2c);
 int8_t asic_program(asic_tetra_t *a, uint8_t num);
 int8_t asic_led(asic_tetra_t *a, uint8_t red, uint8_t green, uint8_t blue);
 int8_t asic_measure(asic_tetra_t *a, uint8_t primary, measurement_t *m);
