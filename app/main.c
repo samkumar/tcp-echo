@@ -46,7 +46,7 @@ typedef struct __attribute__((packed))
   int16_t   mag_x;      // 12:13
   int16_t   mag_y;      // 14:15
   int16_t   mag_z;      // 16:17
-  uint16_t   temp;   // 18:19
+  uint16_t  temp;        // 18:19
   int16_t   reserved;    // 20:21
   uint8_t   max_index[3]; // 22:24
   uint8_t   parity;    // 25
@@ -54,7 +54,19 @@ typedef struct __attribute__((packed))
   //Packed IQ data for 4 pairs
   //M-3, M-2, M-1, M
   uint8_t data[3][16];  //28:75
-} measure_set_t; //76 bytes
+  uint16_t tof_sf[3];   //76:81
+} measure_set_t; //82 bytes
+
+typedef struct
+{
+  uint16_t temp;
+  int16_t acc_x;
+  int16_t acc_y;
+  int16_t acc_z;
+  int16_t mag_x;
+  int16_t mag_y;
+  int16_t mag_z;
+} physical_sensors_t;
 
 // typedef struct __attribute__((packed))
 // {
@@ -78,7 +90,7 @@ extern void send_udp(char *addr_str, uint16_t port, uint8_t *data, uint16_t data
 void reboot(void){
   NVIC_SystemReset();
 }
-//In a 64 byte array of 16 big endian int16_t pairs of I and Q, what
+//In a 64 byte array of 16 big/little? endian int16_t pairs of I and Q, what
 //is the index where the complex magnitude is greatest [0,15]?
 uint8_t calculate_max_index(uint8_t *data, uint8_t print) {
   int64_t ix;
@@ -91,8 +103,8 @@ uint8_t calculate_max_index(uint8_t *data, uint8_t print) {
   indexmax = 0;
 
   for (int i = 0; i < 16; i++) {
-    qx = (int16_t) ((uint16_t)data[i<<2] + (((uint16_t)data[(i<<2) + 1]) << 8));
-    ix = (int16_t) ((uint16_t)data[(i<<2) + 2] + (((uint16_t)data[(i<<2) + 3]) << 8));
+    qx = (int64_t) ((int16_t) ((uint16_t)data[(i<<2)] + (((uint16_t)data[(i<<2) + 1]) << 8)));
+    ix = (int64_t) ((int16_t) ((uint16_t)data[(i<<2) + 2] + (((uint16_t)data[(i<<2) + 3]) << 8)));
     magsqr = (qx * qx) + (ix * ix);
     if (print) {
       printf("%8lx ", (long unsigned int)magsqr);
@@ -154,11 +166,34 @@ uint16_t read_temperature_sensor(void) {
   return 0;
 }
 
-void tx_measure(asic_tetra_t *a, measurement_t *m)
+
+void populate_phy_sense(physical_sensors_t *phy)
 {
   phydat_t output; /* Sensor output data (maximum 3-dimension)*/
   int dim;         /* Demension of sensor output */
-  int16_t temperature;
+  /* Magnetic field 3-dim */
+  dim = saul_reg_read(sensor_mag_t, &output);
+  if (dim > 0) {
+      phy->mag_x = output.val[0]; phy->mag_y = output.val[1]; phy->mag_z = output.val[2];
+  } else {
+      DEBUG("[ERROR] Failed to read magnetic field\n");
+      reboot();
+  }
+
+  /* Acceleration 3-dim */
+  dim = saul_reg_read(sensor_accel_t, &output);
+  if (dim > 0) {
+      phy->acc_x = output.val[0]; phy->acc_y = output.val[1]; phy->acc_z = output.val[2];
+  } else {
+      printf("[ERROR] Failed to read Acceleration\n");
+      reboot();
+  }
+
+  phy->temp = read_temperature_sensor();
+}
+
+void tx_measure(asic_tetra_t *a, measurement_t *m, physical_sensors_t *phy)
+{
   uint8_t parity;
   msi++;
   parity = 0;
@@ -175,26 +210,13 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   #endif
   msz[msi].parity = 0;
 
-  /* Magnetic field 3-dim */
-  dim = saul_reg_read(sensor_mag_t, &output);
-  if (dim > 0) {
-      msz[msi].mag_x = output.val[0]; msz[msi].mag_y = output.val[1]; msz[msi].mag_z = output.val[2];
-  } else {
-      DEBUG("[ERROR] Failed to read magnetic field\n");
-      reboot();
-  }
-
-  /* Acceleration 3-dim */
-  dim = saul_reg_read(sensor_accel_t, &output);
-  if (dim > 0) {
-      msz[msi].acc_x = output.val[0]; msz[msi].acc_y = output.val[1]; msz[msi].acc_z = output.val[2];
-  } else {
-      printf("[ERROR] Failed to read Acceleration\n");
-      reboot();
-  }
-
-  temperature = read_temperature_sensor();
-  msz[msi].temp = temperature;
+  msz[msi].temp = phy->temp;
+  msz[msi].acc_x = phy->acc_x;
+  msz[msi].acc_y = phy->acc_y;
+  msz[msi].acc_z = phy->acc_z;
+  msz[msi].mag_x = phy->mag_x;
+  msz[msi].mag_y = phy->mag_y;
+  msz[msi].mag_z = phy->mag_z;
   //
   // for (int i = 0; i < 16; i++) {
   //     printf("%8u ", i);
@@ -202,8 +224,8 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   // printf(" =======\n");
   for(int i = 0;i<3;i++) {
     uint8_t maxindex = calculate_max_index(m->sampledata[i], 0);
-    //printf(" p=%d m[%d] = %d\n", m->primary, i, maxindex);
-    msz[msi].max_index[i] = maxindex;
+  //  printf(" p=%d m[%d] = %d\n\n", m->primary, i, maxindex);
+    msz[msi].max_index[i] = maxindex + m->offset[i];
     if (maxindex <= 3) {
       maxindex = 0;
     } else {
@@ -212,6 +234,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
     //Copy 4 IQ pairs starting from 3 before the max index, unless the max is right
     //at the beginning, then start from 0
     memcpy(&(msz[msi].data[i][0]), &(m->sampledata[i][maxindex<<2]), 16);
+    msz[msi].tof_sf[i] = m->tof_sf[i];
   }
 
   //Send the calibration result for the primary
@@ -240,7 +263,7 @@ void tx_measure(asic_tetra_t *a, measurement_t *m)
   }
   //Set the type field to 0x55;
   xorbuf[1] = 0x55;
-  send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
+  //send_udp("ff02::1",4747,xorbuf,sizeof(measure_set_t));
 
   int rv = i2c_write_bytes(I2C_1, DIRECT_DATA_ADDRESS, "cafebabe",8);
   if (rv != 8) {
@@ -366,6 +389,7 @@ void dump_measurement(asic_tetra_t *a, measurement_t *m)
 }
 #endif
 measurement_t sampm[6];
+physical_sensors_t gphy;
 void begin(void)
 {
   sensor_config();
@@ -380,21 +404,27 @@ void begin(void)
   }
   while (1)
   {
+    e = asic_calibrate(&a);
+    if (e) {
+      printf("calibrate failed\n");
+      goto failure;
+    }
+    e = asic_fake_measure(&a);
+    if (e) goto failure;
     for (int i = 0; i < 128; i++)
     {
-      e = asic_fake_measure(&a);
-      if (e) goto failure;
       for (int p = 0; p < NUMASICS; p ++)
       {
         e = asic_measure_just_iq(&a, p, &sampm[p]);
         if(e) goto failure;
       }
+      populate_phy_sense(&gphy);
       //printf("transmitting measurement set\n");
       for (int p = 0; p < NUMASICS; p ++)
       {
-        tx_measure(&a, &sampm[p]);
+        tx_measure(&a, &sampm[p], &gphy);
       }
-      xtimer_usleep(50000);
+      xtimer_usleep(100000);
     }
   }
 failure:

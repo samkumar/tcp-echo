@@ -1,6 +1,7 @@
 
 #include "asic.h"
 #include <periph/gpio.h>
+#include <string.h>
 #include "gpb_v1.0_wind.rawbin.h"
 #include "wind_v8.rawbin.h"
 #include "wind_v10.rawbin.h"
@@ -81,12 +82,12 @@
 #ifdef ROOM_TYPE
 #define DEF_MAXRANGE 0x10
 #elif defined(DUCT_TYPE) || defined(DUCT6_TYPE)
-#define DEF_MAXRANGE 32
+#define DEF_MAXRANGE 50
 #endif
 
 #define SAMPLE_SIZE 70
 #define CAL_US 160000
-#define SAMPLE_US 30000
+#define SAMPLE_US 10000
 
 int8_t write_pex_a(asic_tetra_t *a)
 {
@@ -382,14 +383,18 @@ int8_t set_max_range(asic_tetra_t *a, uint8_t num, uint8_t val)
 // }
 //For a room anemometer, read from 0..16
 //For a duct anemometer, read from 12..28
-int8_t read_16_iq_points(asic_tetra_t *a, uint8_t num, uint8_t *dst)
+int8_t read_16_iq_points(asic_tetra_t *a, uint8_t num, uint8_t *dst, uint8_t from)
 {
-  #ifdef ROOM_TYPE
-  return _read_reg(a, num, 0x1c, 64, &dst[0]);
-  #elif defined(DUCT_TYPE) || defined(DUCT6_TYPE)
-  return _read_reg(a, num, 0x4c, 64, &dst[0]);
+  #ifdef AUTORANGE
+  return _read_reg(a, num, 0x1c + (from<<2), 64, &dst[0]);
   #else
-  #error define type yo, what do you think this is?
+    #ifdef ROOM_TYPE
+      return _read_reg(a, num, 0x1c, 64, &dst[0]);
+    #elif defined(DUCT_TYPE) || defined(DUCT6_TYPE)
+      return _read_reg(a, num, 0x4c, 64, &dst[0]);
+    #else
+      #error define type yo, what do you think this is?
+    #endif
   #endif
 }
 int8_t asic_program(asic_tetra_t *a, uint8_t num)
@@ -544,6 +549,14 @@ int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
   set_gint(a, 1);
   xtimer_usleep(20);
   set_gint(a, 0);
+
+  //Workaround, set OPMODE to stop to prevent retrigger
+  for (int i = 0; i < NUMASICS; i++)
+  {
+    e = set_opmode(a, i, 0x01);
+    if (e) goto fail;
+  }
+
   xtimer_usleep(SAMPLE_US);
 
   for (int i = 0; i < NUMASICS; i++)
@@ -560,12 +573,31 @@ int8_t asic_measure_just_iq(asic_tetra_t *a, uint8_t primary, measurement_t *m)
       continue;
     }
     #endif
-    e = read_16_iq_points(a, i, &(m->sampledata[slotindex][0]));
-    slotindex++;
+
+    uint8_t holdbuf [4];
+    e = _read_reg(a, i, TOF_SF, 4, &holdbuf[0]);
     if (e) {
       e = - (40+i);
       goto fail;
     }
+    m->tof_sf[slotindex] = (uint16_t)(holdbuf[0]) + (((uint16_t)holdbuf[1])<<8);
+    uint8_t startindex = holdbuf[3];
+    if (startindex == 255) {
+      m->offset[slotindex] = 255;
+      memset(&(m->sampledata[slotindex][0]), 0, 16);
+    } else {
+      if (startindex >= 4) {
+        startindex -= 4;
+      }
+      m->offset[slotindex] = startindex;
+      e = read_16_iq_points(a, i, &(m->sampledata[slotindex][0]), startindex);
+      if (e) {
+        e = - (40+i);
+        goto fail;
+      }
+    }
+    //printf("primary=%d rx=%d maxi=%d\n", primary, primary < 3 ? slotindex + 3 : slotindex, m->offset[slotindex]);
+    slotindex++;
   }
   m->primary = primary;
   e = E_OK;

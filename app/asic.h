@@ -35,6 +35,8 @@ typedef struct {
   uint64_t uptime;
   uint8_t sampledata [4][70];
   uint8_t primary;
+  uint8_t offset [3];
+  uint16_t tof_sf [3];
 } measurement_t;
 
 int8_t asic_init(asic_tetra_t *a, i2c_t pex_i2c, i2c_t asic_i2c);
