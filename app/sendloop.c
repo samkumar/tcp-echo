@@ -19,41 +19,45 @@ mutex_t ready_mutex = MUTEX_INIT;
 cond_t ready_cond = COND_INIT;
 
 void send_measurement_loop(void) {
+    int sock;
+    int rv;
     for (;;) {
-        int sock = socket(AF_INET6, SOCK_STREAM, 0);
-        if (sock == -1) {
-            perror("socket");
-            goto retry;
-        }
+        {
+            sock = socket(AF_INET6, SOCK_STREAM, 0);
+            if (sock == -1) {
+                perror("socket");
+                goto retry;
+            }
 
-        struct sockaddr_in6 receiver;
-        receiver.sin6_family = AF_INET6;
-        receiver.sin6_port = htons(RECEIVER_PORT);
+            struct sockaddr_in6 receiver;
+            receiver.sin6_family = AF_INET6;
+            receiver.sin6_port = htons(RECEIVER_PORT);
 
-        int rv = inet_pton(AF_INET6, RECEIVER_IP, &receiver.sin6_addr);
-        if (rv == -1) {
-            perror("invalid address family in inet_pton");
-            goto retry;
-        } else if (rv == 0) {
-            perror("invalid ip address in inet_pton");
-            goto retry;
-        }
+            rv = inet_pton(AF_INET6, RECEIVER_IP, &receiver.sin6_addr);
+            if (rv == -1) {
+                perror("invalid address family in inet_pton");
+                goto retry;
+            } else if (rv == 0) {
+                perror("invalid ip address in inet_pton");
+                goto retry;
+            }
 
-        struct sockaddr_in6 local;
-        local.sin6_family = AF_INET6;
-        local.sin6_addr = in6addr_any;
-        local.sin6_port = htons(SENDER_PORT);
+            struct sockaddr_in6 local;
+            local.sin6_family = AF_INET6;
+            local.sin6_addr = in6addr_any;
+            local.sin6_port = htons(SENDER_PORT);
 
-        rv = bind(sock, (struct sockaddr*) &local, sizeof(struct sockaddr_in6));
-        if (rv == -1) {
-            perror("bind");
-            goto retry;
-        }
+            rv = bind(sock, (struct sockaddr*) &local, sizeof(struct sockaddr_in6));
+            if (rv == -1) {
+                perror("bind");
+                goto retry;
+            }
 
-        rv = connect(sock, (struct sockaddr*) &receiver, sizeof(struct sockaddr_in6));
-        if (rv == -1) {
-            perror("connect");
-            goto retry;
+            rv = connect(sock, (struct sockaddr*) &receiver, sizeof(struct sockaddr_in6));
+            if (rv == -1) {
+                perror("connect");
+                goto retry;
+            }
         }
 
         for (;;) {
@@ -84,6 +88,8 @@ void send_measurement_loop(void) {
 
     retry:
         close(sock);
+        /* Wait three seconds before trying to connect again. */
+        xtimer_usleep(3000000u);
     }
 }
 
@@ -94,7 +100,8 @@ void* sendloop(void* arg) {
 }
 
 static kernel_pid_t sendloop_pid = 0;
-static char sendloop_stack[2048];
+//static char sendloop_stack[1392];
+static char sendloop_stack[2500] __attribute__((aligned(4)));
 kernel_pid_t start_sendloop(void)
 {
     if (sendloop_pid != 0) {

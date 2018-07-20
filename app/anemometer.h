@@ -27,6 +27,8 @@ typedef struct __attribute__((packed))
 
 kernel_pid_t start_sendloop(void);
 
-#define SENDER_PORT 49999
-#define RECEIVER_IP "fdde:ad00:beef:0:e9f0:45bc:c507:6f0e"
+#define SENDER_PORT 49998
+// #define RECEIVER_IP "fdde:ad00:beef:0:e9f0:45bc:c507:6f0e"
+// #define RECEIVER_IP "2607:f140:400:a009:58c0:ee04:ccd:e5dc"
+#define RECEIVER_IP "2001:470:4a71:0:3474:775c:b3f3:4887"
 #define RECEIVER_PORT 50000
