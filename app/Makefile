@@ -1,4 +1,4 @@
-APPLICATION = anemometer_qfw_tcp
+APPLICATION = tcp_echo
 RIOTBASE = $(CURDIR)/../RIOT-OS
 BOARD = hamilton
 
@@ -92,11 +92,11 @@ CFLAGS    += -DDMAC_ENABLE=0
 CFLAGS    += -DVDD=1800
 
 # Sensors
-USEMODULE += saul_reg        # SAUL: sensor/actuator abstraction layer
-USEMODULE += auto_init_saul
+# USEMODULE += saul_reg        # SAUL: sensor/actuator abstraction layer
+#USEMODULE += auto_init_saul
 #USEMODULE += tmp006          # ambient temperature
 # USEMODULE += hdc1000         # humidity and temperature
-USEMODULE += fxos8700        # acceleration and magnetic field
+#USEMODULE += fxos8700        # acceleration and magnetic field
 # USEMODULE += apds9007        # illumination
 # USEMODULE += ekmb            # pir-based occupancy
 # USEMODULE += pulse_counter   # simple push button

@@ -8,17 +8,17 @@
 #include <unistd.h>
 
 #include "sched.h"
-#include <cond.h>
-#include <mutex.h>
+#include <periph/cpuid.h>
 
-#include "anemometer.h"
+#include "target.h"
 
-measure_set_t reading;
-bool reading_ready = false;
-mutex_t ready_mutex = MUTEX_INIT;
-cond_t ready_cond = COND_INIT;
+#define ECHO_BUF_SIZE 4
+char echo_buf[ECHO_BUF_SIZE];
 
-void send_measurement_loop(void) {
+extern char cpu_id[CPUID_LEN];
+extern char ip6_addr[CPUID_LEN];
+
+void send_echo_loop(void) {
     int sock;
     int rv;
     for (;;) {
@@ -33,7 +33,7 @@ void send_measurement_loop(void) {
             receiver.sin6_family = AF_INET6;
             receiver.sin6_port = htons(RECEIVER_PORT);
 
-            rv = inet_pton(AF_INET6, RECEIVER_IP, &receiver.sin6_addr);
+            rv = inet_pton(AF_INET6, TARGET_IP6_ADDR, &receiver.sin6_addr);
             if (rv == -1) {
                 perror("invalid address family in inet_pton");
                 goto retry;
@@ -53,37 +53,52 @@ void send_measurement_loop(void) {
                 goto retry;
             }
 
+            printf("Calling connect()\n");
+
             rv = connect(sock, (struct sockaddr*) &receiver, sizeof(struct sockaddr_in6));
             if (rv == -1) {
                 perror("connect");
                 goto retry;
             }
+
+            printf("Sucessful connect()\n");
         }
 
         for (;;) {
-            measure_set_t local_reading;
-            /*
-             * This loop does the following:
-             * 1) Wait until the next measurement is ready
-             * 2) Send it over TCP
-             */
-            mutex_lock(&ready_mutex);
-            while (!reading_ready) {
-                cond_wait(&ready_cond, &ready_mutex);
-            }
-            memcpy(&local_reading, &reading, sizeof(local_reading));
-            reading_ready = false;
-            mutex_unlock(&ready_mutex);
-
-            /*
-             * Now we have copied the reading into our local space, so we don't
-             * need to worry about the measurement thread overwriting it.
-             */
-            rv = send(sock, &local_reading, sizeof(local_reading), 0);
+            rv = send(sock, cpu_id, CPUID_SEND_LEN, 0);
             if (rv == -1) {
                 perror("send");
                 goto retry;
             }
+            rv = send(sock, ip6_addr, sizeof(ip6_addr), 0);
+            if (rv == -1) {
+                perror("send");
+                goto retry;
+            }
+            rv = send(sock, echo_buf, ECHO_BUF_SIZE, 0);
+            if (rv == -1) {
+                perror("send");
+                goto retry;
+            }
+
+            int bytes_read = 0;
+            while (bytes_read < ECHO_BUF_SIZE) {
+                rv = recv(sock, &echo_buf[bytes_read], ECHO_BUF_SIZE - bytes_read, 0);
+                if (rv == 0) {
+                    goto retry;
+                }
+                if (rv < 0) {
+                    perror("read");
+                    goto retry;
+                }
+                bytes_read += rv;
+            }
+
+            /* Blink LED and wait 20 seconds before replying. */
+            LED_ON;
+            xtimer_usleep(500000u);
+            LED_OFF;
+            xtimer_usleep(19500000u);
         }
 
     retry:
@@ -95,7 +110,7 @@ void send_measurement_loop(void) {
 
 void* sendloop(void* arg) {
     (void) arg;
-    send_measurement_loop();
+    send_echo_loop();
     return NULL;
 }
 
